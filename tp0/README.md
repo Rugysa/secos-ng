@@ -47,6 +47,8 @@ kernel mem [0x302010 - 0x303820]
 déterminer la taille de la section `.mbh`  et `.stack` et en déduire d'où
 provient la valeur de point d'entrée à `0x302010` au lieu de `0x300000`.**
 
+Réponse : .mbh : 10 et .stack 2000, d'où le déalage de 2010
+
 Note : il est possible de s'aider également de la page wiki sur les options de [linkage](https://github.com/agantet/secos-ng/wiki/Tooling#options-de-linkage).
 
 
@@ -87,6 +89,8 @@ comme celle ci-dessous et l'afficher dans les logs de debug de SECOS :**
   suivant et observer ce qu'il se passe en lisant/écrivant dans une zone de
   mémoire libre, et en lisant/écrivant dans une zone de mémoire réservée, par
   exemple ainsi :**
+
+Réponse : Cela semble cohérent car lorsqu'on veut écrire dans la mémoire disponible on remarque qu'après écriture la taille de la mémoire disponible a bien baissé et lorsqu'on veut écrire dans la mémoire réservée, la taille ce elle-ci ne varie pas car vu qu'elle est réservée on ne peut pas écrire dedans.
 
 ```c
 int *ptr_in_available_mem;
