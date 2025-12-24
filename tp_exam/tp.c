@@ -1,8 +1,25 @@
 /* GPLv2 (c) Airbus */
 #include <debug.h>
+#include <info.h>
+#include <asm.h>
 #include <segmem.h>
-#include <string.h>
+#include <pagemem.h>
 #include <intr.h>
+#include <types.h>
+#include <cr.h>
+
+/*
+tss_t tss;
+idt_reg_t idtr;
+uint32_t tasks[4] = {};
+unsigned int number_tasks = 0;
+int current_task = -1;
+*/
+
+
+int task_encours = 0;
+
+// Segmentation
 
 #define c0_idx  1
 #define d0_idx  2
@@ -71,5 +88,78 @@ void init_gdt() {
    set_gs(d0_sel);
 }
 
+
+// Pagination
+
+#define SHARED_PAGE 0x1000000
+#define PTB_KERNEL 0x702000
+#define PTB_USER1 0x703000
+#define PTB_USER2 0x704000
+pde32_t *pgd_task1 = (pde32_t*)0x700000;
+pde32_t *pgd_task2 = (pde32_t*)0x701000;
+
+// identity map toutes les pages de la PTB
+void idmap_ptb (pte32_t *ptb, uint32_t first_index_page, uint32_t perms) {
+  memset((void*)ptb, 0, 1024);
+  for (size_t i = 0; i < 1024; i++){
+    pg_set_entry(&ptb[i], perms, (uint32_t)first_index_page  + i);
+  }
+}
+
+
+
+void set_paging(){
+
+  //Definir 2 pages directories vides pour chaque tâhce
+  memset((void*)pgd_task1, 0, 1024);
+  memset((void*)pgd_task2, 0, 1024);
+
+  // Definition des pages tables
+  pte32_t* ptb[3];
+  ptb[0] = (pte32_t*) PTB_KERNEL;
+  ptb[1] =  (pte32_t*)PTB_USER1;
+  ptb[2] = (pte32_t*) PTB_USER2;
+
+  // On fait l'identity map
+  for(int i=0; i<3; i++){
+    if (i== 0) {
+      idmap_ptb(ptb[i], i * (1 << 10),PG_KRN | PG_RW);
+    } else {
+      idmap_ptb(ptb[i], i * (1 << 10), PG_USR | PG_RW); 
+    }
+    
+  }
+  
+
+  // definir espace virtuel task1
+  pg_set_entry(&pgd_task1[0],PG_KRN | PG_RW, pg_4K_get_nr((uint32_t)ptb[0])); //Kernel
+  pg_set_entry(&pgd_task1[1],PG_USR | PG_RW, pg_4K_get_nr((uint32_t)ptb[1])); 
+  pg_set_entry(&ptb[1][1023], PG_USR | PG_RW, pg_4K_get_nr((uint32_t) SHARED_PAGE)); // page partagée (dans la dernière page)
+
+  // definir espace virtuel task1: ptbs kernel + ptb task2
+  pg_set_entry(&pgd_task2[0],PG_KRN | PG_RW, pg_4K_get_nr((uint32_t)ptb[0])); //Kernel
+  pg_set_entry(&pgd_task2[1],PG_USR | PG_RW, pg_4K_get_nr((uint32_t)ptb[2]));
+    pg_set_entry(&ptb[2][1023], PG_USR | PG_RW, pg_4K_get_nr((uint32_t) SHARED_PAGE)); // page partagée (dans la dernière page)
+
+  set_cr3((uint32_t)pgd_task1); // on commence dans la task 1
+}
+
+
+
 void tp() {
+
+   // Lancement de la segmentation
+   init_gdt();
+
+   // Pagination
+   set_paging();
+   set_cr0(get_cr0() | CR0_PG | CR0_PE);
+
+
+    
+
+    while(1){
+      //scheduler();
+
+    }
 }
