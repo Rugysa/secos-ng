@@ -8,16 +8,9 @@
 #include <types.h>
 #include <cr.h>
 
-/*
-tss_t tss;
-idt_reg_t idtr;
-uint32_t tasks[4] = {};
-unsigned int number_tasks = 0;
-int current_task = -1;
-*/
 
+// Projet de FALLOT Ysabel
 
-int task_encours = 0;
 
 // Segmentation
 
@@ -99,10 +92,10 @@ pde32_t *pgd_task1 = (pde32_t*)0x700000;
 pde32_t *pgd_task2 = (pde32_t*)0x701000;
 
 // identity map toutes les pages de la PTB
-void idmap_ptb (pte32_t *ptb, uint32_t first_index_page, uint32_t perms) {
+void identity_mapping (pte32_t *ptb, uint32_t first_index_page, uint32_t permissions) {
   memset((void*)ptb, 0, 1024);
   for (size_t i = 0; i < 1024; i++){
-    pg_set_entry(&ptb[i], perms, (uint32_t)first_index_page  + i);
+    pg_set_entry(&ptb[i], permissions, (uint32_t)first_index_page  + i);
   }
 }
 
@@ -123,14 +116,12 @@ void set_paging(){
   // On fait l'identity map
   for(int i=0; i<3; i++){
     if (i== 0) {
-      idmap_ptb(ptb[i], i * (1 << 10),PG_KRN | PG_RW);
+      identity_mapping(ptb[i], i * (1 << 10),PG_KRN | PG_RW);
     } else {
-      idmap_ptb(ptb[i], i * (1 << 10), PG_USR | PG_RW); 
+      identity_mapping(ptb[i], i * (1 << 10), PG_USR | PG_RW); 
     }
     
   }
-  
-
   // definir espace virtuel task1
   pg_set_entry(&pgd_task1[0],PG_KRN | PG_RW, pg_4K_get_nr((uint32_t)ptb[0])); //Kernel
   pg_set_entry(&pgd_task1[1],PG_USR | PG_RW, pg_4K_get_nr((uint32_t)ptb[1])); 
@@ -139,11 +130,96 @@ void set_paging(){
   // definir espace virtuel task1: ptbs kernel + ptb task2
   pg_set_entry(&pgd_task2[0],PG_KRN | PG_RW, pg_4K_get_nr((uint32_t)ptb[0])); //Kernel
   pg_set_entry(&pgd_task2[1],PG_USR | PG_RW, pg_4K_get_nr((uint32_t)ptb[2]));
-    pg_set_entry(&ptb[2][1023], PG_USR | PG_RW, pg_4K_get_nr((uint32_t) SHARED_PAGE)); // page partagée (dans la dernière page)
+  pg_set_entry(&ptb[2][1023], PG_USR | PG_RW, pg_4K_get_nr((uint32_t) SHARED_PAGE)); // page partagée (dans la dernière page)
 
   set_cr3((uint32_t)pgd_task1); // on commence dans la task 1
 }
 
+
+
+// Gestion des tâches
+int task_encours;
+uint32_t *shared_mem = (uint32_t *)SHARED_PAGE;
+
+// Tâche 1 qui incrémente le compteur dans la mémoire partagée
+__attribute__((section(".user1"))) void user1(){
+   debug("On est dans tâche 1\n");
+    *shared_mem = 0;
+    while (1) {
+      (*shared_mem)++;
+}
+}
+
+// Fonction utilisée par la tâche 2 pour appeler le syscall qui affiche la mémoire partagée
+__attribute__((section(".sys_count"))) void sys_counter(uint32_t*counter){
+    asm volatile("int $80"::"S"(counter));
+}
+
+// Tâche 2 qui appelle sys_counter pour afficher la valeur
+__attribute__((section(".user2"))) void user2(){
+   debug("On est dans tâche 2\n");
+    while (1) {
+      sys_counter(shared_mem);
+    }
+}
+
+
+
+// Appel système qui affoche la valeur
+// TO DO : à faire
+void syscall(){
+    debug("Syscall interruption (80): Appel de User2 \n");
+}
+
+
+// Fonction sauvegardant le contexte avant de changer de tâches
+void scheduler(){
+    debug("Record contexte.\n");
+    asm("handler_scheduler:\n");
+    asm("pusha\n");
+    asm("call change_task\n");
+    asm("popa\n");
+    // Return traiter l’interruption 3/ Restaurer les registres (popa), 4/ Retourner là où on était (iret)
+    asm("iret\n");
+
+    asm("call scheduler\n");
+  }
+
+
+
+// Fonction pour changer de tâches
+void change_task(){
+    debug("CHangement de tâches.\n");
+    if (task_encours != 1) {
+      // On passe dans la tâche 1
+      debug("Task 1:\n");
+      task_encours=1;
+      asm("call user1");
+    }
+    else {
+        task_encours=2;
+        debug("Task 2:\n");
+        // On appelle l'interruption de la tâche 2
+        asm("call user2");
+    }
+}
+
+
+//Fonction créant l'IDT et ajoutant les handlers associés
+void set_interrupt(){
+    // Définition de l'IDT
+    idt_reg_t idtr;
+    get_idtr(idtr);
+    int_desc_t *idt = idtr.desc;
+
+    // Ajout du handler lié au scheduler
+    build_int_desc(&idt[32], c0_sel, (offset_t)scheduler);
+    idt[32].dpl = SEG_SEL_USR;
+
+    // Ajout du handler syscall (80)
+    build_int_desc(&idt[0x80], c0_sel, (offset_t)syscall);
+    idt[0x80].dpl = SEG_SEL_USR; 
+}
 
 
 void tp() {
@@ -155,11 +231,26 @@ void tp() {
    set_paging();
    set_cr0(get_cr0() | CR0_PG | CR0_PE);
 
+   // Interruption
+   set_interrupt();
 
+   task_encours = 1;
+
+   //Lancement du changement tâches
+   scheduler(); // Nécessaire ? Pas censé être sur le TIC d'horloge
     
 
     while(1){
-      //scheduler();
 
     }
 }
+/*
+Plusieurs problèmes identifiés :
+- Page Fault : origine probable : 
+        - l'accès à la mémoire partagé pour incrémenter le compteur
+        - mauvaise sauvegarde de contexte lors du changement de tâche
+
+- Tâche 2 non testé : problème : lorsque dans la fonction tp() je mets la tâche courante à 2, on semble être dans la fonction 1 (mais le "code" (les erreurs à la suite) s'arrête)
+
+
+*/
